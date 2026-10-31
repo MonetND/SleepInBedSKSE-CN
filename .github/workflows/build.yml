@@ -1,0 +1,90 @@
+name: Build SleepInBedSKSE v1.4 CN
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [master, main]
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Patch xmake.lua for CI
+        shell: pwsh
+        run: |
+          $p = 'xmake.lua'
+          $c = Get-Content $p -Raw
+          $c = $c -replace 'set_xmakever\("2\.8\.2"\)', 'set_xmakever("3.0.0")'
+          $c = $c -replace 'includes\("E:/CommonLibVR"\)', 'includes("CommonLibVR")'
+          Set-Content $p $c -NoNewline -Encoding utf8
+          Write-Host '--- xmake.lua 前 5 行 ---'
+          Get-Content $p -TotalCount 5
+
+      - name: Setup MSVC
+        uses: TheMrMilchmann/setup-msvc-dev@v4.0.0
+        with:
+          arch: x64
+
+
+      - name: Clone CommonLibSSE-NG (ng)
+        run: git clone --depth 1 --branch ng --recurse-submodules --shallow-submodules https://github.com/alandtse/CommonLibSSE-NG.git CommonLibVR
+
+      - name: Install xmake
+        shell: pwsh
+        run: |
+          $zip = Join-Path $env:RUNNER_TEMP 'xmake.zip'
+          Invoke-WebRequest -Uri 'https://github.com/xmake-io/xmake/releases/download/v3.1.2/xmake-v3.1.2.win64.zip' -OutFile $zip
+          Expand-Archive -Path $zip -DestinationPath (Join-Path $env:RUNNER_TEMP 'xmake') -Force
+          $exe = Get-ChildItem (Join-Path $env:RUNNER_TEMP 'xmake') -Recurse -Filter 'xmake.exe' | Select-Object -First 1
+          if (-not $exe) { throw 'xmake.exe 没找到，压缩包结构可能变了' }
+          Write-Host "xmake: $($exe.FullName)"
+          $exe.DirectoryName | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          & $exe.FullName --version
+
+      - name: Configure
+        run: xmake f -v -c -p windows -a x64 --toolchain=msvc --skyrim_vr=y -y
+
+      - name: Build
+        run: xmake build -v -y
+
+      - name: Verify and package
+        shell: pwsh
+        run: |
+          $dll = 'build/windows/x64/releasedbg/SleepInBedSKSE.dll'
+          if (-not (Test-Path $dll)) { throw "没找到产物 $dll" }
+
+          $bytes = [System.IO.File]::ReadAllBytes((Resolve-Path $dll))
+          $ascii = [System.Text.Encoding]::ASCII.GetString($bytes)
+          $checks = @{
+            '翻译文件路径'   = 'SleepInBedSKSE.json'
+            'Localization' = 'Localization'
+            'Bedtime 表'    = 'Bedtime'
+            'Outfits 表'    = 'Outfits'
+          }
+          foreach ($k in $checks.Keys) {
+            if ($ascii -match [regex]::Escape($checks[$k])) {
+              Write-Host "OK   $k : $($checks[$k])"
+            } else {
+              Write-Host "WARN $k : $($checks[$k]) 未找到"
+            }
+          }
+          $size = (Get-Item $dll).Length
+          Write-Host "DLL 大小: $size 字节"
+          if ($size -lt 300000) { throw "DLL 太小（$size），编译产物可疑" }
+
+          New-Item -ItemType Directory -Force -Path 'dist/SKSE/Plugins' | Out-Null
+          Copy-Item $dll 'dist/SKSE/Plugins/'
+          Copy-Item 'SleepInBedSKSE.json' 'dist/SKSE/Plugins/'
+          Write-Host '--- dist 内容 ---'
+          Get-ChildItem 'dist' -Recurse -File | Select-Object FullName, Length
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: SleepInBedSKSE-CN-1.4
+          path: dist/
