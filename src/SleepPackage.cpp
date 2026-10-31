@@ -169,7 +169,7 @@ namespace SleepPackage
 		if (!process) {
 			return false;
 		}
-		auto* package = RE::TESPackage::CreatePackage(RE::PACKAGE_PROCEDURE_TYPE::kSleep);
+		auto* package = RE::TESPackage::CreatePackage(RE::PACKAGE_TYPE::kSleep);
 		if (!package) {
 			return false;
 		}
